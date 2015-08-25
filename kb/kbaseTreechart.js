@@ -45,11 +45,36 @@ module.exports = KBWidget({
         staticHeight : false,
         canShrinkWidth : true,
 
+        bias : "root",
+
     },
 
     _accessors: [
         'comparison',
     ],
+
+    calculateNodeDepths : function(nodes) {
+        //we need to know the distance of all nodes from a leaf, in order to use leaf bias. Dammit.
+        nodes.forEach(function (node) {
+            if (! node.children && ! node._children) {
+
+                node.nodeDepth = 0;
+
+                var parent = node.parent;
+                var nodeDepth = 1;
+
+                while (parent != undefined) {
+                    if (parent.nodeDepth == undefined || parent.nodeDepth < nodeDepth) {
+                        parent.nodeDepth = nodeDepth;
+                    }
+
+                    nodeDepth++;
+                    parent = parent.parent;
+                }
+            }
+        })
+        //done calculating distances for leaf bias
+    },
 
     afterInArray: function (val, array) {
         var idx = array.indexOf(val) + 1;
@@ -253,6 +278,7 @@ module.exports = KBWidget({
 
 
         this.nodes = this.treeLayout.nodes(this.dataset()).reverse();
+        this.calculateNodeDepths(this.nodes);
 
         var chartOffset = 0;
 
@@ -491,6 +517,9 @@ module.exports = KBWidget({
                     var y = $tree.options.fixed && (!d.children || d.length == 0)
                         ? $tree.options.fixedDepth
                         : d.y;
+                    if ($tree.options.bias == 'leaf' && d.parent != undefined) {
+                        y = $tree.options.fixedDepth - d.nodeDepth * $tree.options.distance;
+                    }
                     return "translate(" + y + "," + d.x + ")";
                 })
             ;
@@ -658,57 +687,74 @@ module.exports = KBWidget({
 
         var $tree = this;
 
+        var getYCoords = function(d) {
+            var sourceY = d.source.y;
+            var targetY = $tree.options.fixed && (! d.target.children || d.target.length == 0)
+                ? $tree.options.fixedDepth
+                : d.target.y;
+
+            if ($tree.options.bias == 'leaf' && d.source.nodeDepth != undefined && d.target.nodeDepth != undefined) {
+                //Sigh. This is gonna be a pain in the ass.
+
+                //just blissfully assume that we should be at the end.
+                targetY = $tree.options.fixedDepth - d.target.nodeDepth * $tree.options.distance;
+                sourceY = $tree.options.fixedDepth - d.source.nodeDepth * $tree.options.distance;
+
+                if (d.source.parent == undefined) {
+                    sourceY = d.source.y;
+                }
+
+            }
+
+            return { source : sourceY, target : targetY }
+        }
+
         if (this.options.lineStyle == 'curve') {
             this.diagonal = d3.svg.diagonal()
-                .projection(function (d) {
-                    var y = $tree.options.fixed && (!d.children || d.length == 0)
+                .projection(function(d) {
+                    var y = $tree.options.fixed && (! d.children || d.length == 0)
                         ? $tree.options.fixedDepth
                         : d.y;
                     return [y, d.x];
                 });
         }
         else if (this.options.lineStyle == 'straight') {
-            this.diagonal = function (d) {
+            this.diagonal = function(d) {
 
-                var y = $tree.options.fixed && (!d.target.children || d.target.children.length == 0)
-                    ? $tree.options.fixedDepth
-                    : d.target.y;
+                var yCoords = getYCoords(d);
 
-                return "M" + d.source.y + ',' + d.source.x + 'L' + y + ',' + d.target.x;
+                return "M" + yCoords.source + ',' + d.source.x + 'L' + yCoords.target + ',' + d.target.x;
             }
         }
         else if (this.options.lineStyle == 'square') {
-            this.diagonal = function (d) {
+            this.diagonal = function(d) {
 
-                var y = $tree.options.fixed && (!d.target.children || d.target.children.length == 0)
-                    ? $tree.options.fixedDepth
-                    : d.target.y;
+                var yCoords = getYCoords(d);
 
-                return "M" + d.source.y + ',' + d.source.x +
-                    'L' + d.source.y + ',' + d.target.x +
-                    'L' + y + ',' + d.target.x
-                    ;
+                return "M" + yCoords.source + ',' + d.source.x +
+                       'L' + yCoords.source + ',' + d.target.x +
+                       'L' + yCoords.target + ',' + d.target.x
+                ;
             }
         }
         else if (this.options.lineStyle == 'step') {
-            this.diagonal = function (d) {
+            this.diagonal = function(d) {
 
-                var y = $tree.options.fixed && (!d.target.children || d.target.children.length == 0)
-                    ? $tree.options.fixedDepth
-                    : d.target.y;
+                var yCoords = getYCoords(d);
 
-                var halfY = (y - d.source.y ) / 2 + d.source.y;
+                var halfY = (yCoords.target - yCoords.source ) / 2 + yCoords.source;
 
-                return "M" + d.source.y + ',' + d.source.x +
-                    'L' + halfY + ',' + d.source.x +
-                    'L' + halfY + ',' + d.target.x +
-                    'L' + y + ',' + d.target.x
-                    ;
+                return "M" + yCoords.source + ',' + d.source.x +
+                       'L' + halfY + ',' + d.source.x +
+                       'L' + halfY + ',' + d.target.x +
+                       'L' + yCoords.target + ',' + d.target.x
+                ;
             }
         }
 
         // Compute the new tree layout.
         this.nodes = this.treeLayout.nodes(this.dataset()).reverse();
+        this.calculateNodeDepths(this.nodes);
 
         this.dataset().x0 = bounds.size.height / 2;
         this.dataset().y0 = 0;
